@@ -6,6 +6,8 @@ import Logo from '@/components/Logo';
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Menu,
   Maximize2,
   Minimize2,
   FileDown,
@@ -84,6 +86,34 @@ export default function AISummerCampSlideshow() {
   // Fullscreen Slide Strip visibility state
   const [showFullscreenOutline, setShowFullscreenOutline] = useState<boolean>(false);
 
+  // Mobile and Interactive States
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+  const [isChangingDay, setIsChangingDay] = useState<boolean>(false);
+  const [showDayDropdown, setShowDayDropdown] = useState<boolean>(false);
+
+  const dayTransitionTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const changeDay = useCallback((dayNum: number, startSlideIndex: number = 0) => {
+    if (dayTransitionTimerRef.current) {
+      clearTimeout(dayTransitionTimerRef.current);
+    }
+    setIsChangingDay(true);
+    setSelectedDayNum(dayNum);
+    setActiveSlideIndex(startSlideIndex);
+    dayTransitionTimerRef.current = setTimeout(() => {
+      setIsChangingDay(false);
+    }, 250);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (dayTransitionTimerRef.current) {
+        clearTimeout(dayTransitionTimerRef.current);
+      }
+    };
+  }, []);
+
   // Helper for slide metadata (Urdu labels, icons, style)
   const getSlideTypeMeta = (type: string) => {
     switch (type) {
@@ -156,14 +186,13 @@ export default function AISummerCampSlideshow() {
       // Go to next Day deck if available
       const nextDay = decks.find((d) => d.day === selectedDayNum + 1);
       if (nextDay) {
-        setSelectedDayNum(selectedDayNum + 1);
-        setActiveSlideIndex(0);
+        changeDay(selectedDayNum + 1, 0);
         showNotification('success', `Moved to Day ${selectedDayNum + 1}: ${nextDay.topic}`);
       } else {
         showNotification('success', 'End of Week 4 curriculum. Outstanding job!');
       }
     }
-  }, [activeSlideIndex, currentDeck, selectedDayNum, decks]);
+  }, [activeSlideIndex, currentDeck, selectedDayNum, decks, changeDay]);
 
   const prevSlide = useCallback(() => {
     setSlideDirection('prev');
@@ -173,12 +202,11 @@ export default function AISummerCampSlideshow() {
       // Go to previous Day deck last slide if available
       const prevDay = decks.find((d) => d.day === selectedDayNum - 1);
       if (prevDay) {
-        setSelectedDayNum(selectedDayNum - 1);
-        setActiveSlideIndex(prevDay.slides.length - 1);
+        changeDay(selectedDayNum - 1, prevDay.slides.length - 1);
         showNotification('success', `Returned to Day ${selectedDayNum - 1}: ${prevDay.topic}`);
       }
     }
-  }, [activeSlideIndex, selectedDayNum, decks]);
+  }, [activeSlideIndex, selectedDayNum, decks, changeDay]);
 
   // Keyboard controls for the presentation
   useEffect(() => {
@@ -198,6 +226,31 @@ export default function AISummerCampSlideshow() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFullscreen, nextSlide, prevSlide]);
+
+  // Swipe gestures for touch screens
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current) return;
+    const touch = e.changedTouches[0];
+    const deltaX = touch.clientX - touchStartRef.current.x;
+    const deltaY = touch.clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+
+    // Swipe threshold is 40px horizontally, and must be mostly horizontal (deltaX > deltaY)
+    if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      if (deltaX > 0) {
+        prevSlide();
+      } else {
+        nextSlide();
+      }
+    }
+  }, [nextSlide, prevSlide]);
 
   // Count words in a bullet point
   const getWordCount = (text: string) => {
@@ -324,8 +377,7 @@ export default function AISummerCampSlideshow() {
         const json = JSON.parse(event.target?.result as string);
         if (Array.isArray(json) && json.length > 0 && 'day' in json[0] && 'slides' in json[0]) {
           saveDecks(json);
-          setSelectedDayNum(1);
-          setActiveSlideIndex(0);
+          changeDay(1, 0);
           showNotification('success', 'فائل کامیابی سے لوڈ ہو گئی ہے! Slide decks successfully loaded!');
         } else {
           showNotification('error', 'غلط فائل فارمیٹ! File format is invalid. Must be a valid 20-day slide JSON.');
@@ -386,8 +438,7 @@ export default function AISummerCampSlideshow() {
         setSyncRole('viewer');
         setSyncConnected(true);
         setIsSyncPaused(false);
-        setSelectedDayNum(data.day);
-        setActiveSlideIndex(data.slideIndex);
+        changeDay(data.day, data.slideIndex);
         showNotification('success', `کامیابی سے لائیو کلاس ${cleanCode} میں شامل ہو گئے!`);
       } else {
         showNotification('error', `کوڈ ${cleanCode} کا کوئی سیشن نہیں ملا! Active session not found.`);
@@ -440,8 +491,9 @@ export default function AISummerCampSlideshow() {
         const res = await fetch(`/api/sync?sessionCode=${encodeURIComponent(syncSessionCode)}`);
         const data = await res.json();
         if (data.success) {
-          if (data.day !== selectedDayNum || data.slideIndex !== activeSlideIndex) {
-            setSelectedDayNum(data.day);
+          if (data.day !== selectedDayNum) {
+            changeDay(data.day, data.slideIndex);
+          } else if (data.slideIndex !== activeSlideIndex) {
             setActiveSlideIndex(data.slideIndex);
           }
         } else {
@@ -455,7 +507,7 @@ export default function AISummerCampSlideshow() {
     }, 1500);
 
     return () => clearInterval(pollInterval);
-  }, [syncRole, syncConnected, syncSessionCode, isSyncPaused, selectedDayNum, activeSlideIndex]);
+  }, [syncRole, syncConnected, syncSessionCode, isSyncPaused, selectedDayNum, activeSlideIndex, changeDay]);
 
   // Get active presentation colors & backgrounds based on Projector Mode
   const getProjectorColors = () => {
@@ -532,7 +584,18 @@ export default function AISummerCampSlideshow() {
       
       {/* HEADER BAR */}
       <header className="bg-[#0E1C35] text-white py-4 px-6 flex justify-between items-center border-b border-[#E05C1A]/30 z-20 sticky top-0 shadow-md">
-        <Logo variant="light" />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsMobileSidebarOpen(true)}
+            className="lg:hidden flex items-center justify-center p-2.5 rounded-lg border border-white/20 bg-white/5 hover:bg-[#E05C1A] text-white transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-[#E05C1A] outline-none"
+            style={{ minWidth: '44px', minHeight: '44px' }}
+            aria-label="Open Curriculum Menu"
+            title="Open Curriculum Menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <Logo variant="light" />
+        </div>
         <div className="flex items-center gap-4">
           <div className="hidden lg:flex items-center gap-3 text-xs bg-white/5 px-4 py-2 rounded-full border border-white/10 font-mono">
             <span className="flex items-center gap-1.5 text-[#00c896]">
@@ -565,10 +628,31 @@ export default function AISummerCampSlideshow() {
       </header>
 
       {/* DUAL WORKSPACE LAYOUT */}
-      <main className="flex-1 flex flex-col lg:flex-row min-h-0">
+      <main className="flex-1 flex flex-col lg:flex-row min-h-0 relative">
         
+        {/* Backdrop for Mobile Sidebar Drawer */}
+        {isMobileSidebarOpen && (
+          <div 
+            className="fixed inset-0 bg-black/60 z-30 lg:hidden transition-opacity duration-300"
+            onClick={() => setIsMobileSidebarOpen(false)}
+          />
+        )}
+
         {/* LEFT WORKSPACE: SIDEBAR DIRECTORY & SELECTOR */}
-        <section className="w-full lg:w-80 bg-[#0E1C35] text-white border-r border-[#E05C1A]/20 flex flex-col flex-shrink-0 z-10 shadow-sm transition-all duration-300">
+        <section className={`fixed inset-y-0 left-0 w-80 bg-[#0E1C35] text-white border-r border-[#E05C1A]/20 flex flex-col z-40 shadow-2xl transition-all duration-300 transform lg:static lg:translate-x-0 shrink-0 ${
+          isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}>
+          {/* Mobile Close Button */}
+          <div className="lg:hidden p-4 border-b border-white/10 flex justify-between items-center bg-black/30 shrink-0">
+            <span className="font-sans font-bold text-xs uppercase tracking-wider text-[#E05C1A]">Curriculum Map / نصاب</span>
+            <button
+              onClick={() => setIsMobileSidebarOpen(false)}
+              className="p-1.5 rounded-lg border border-white/15 hover:bg-white/10 text-white text-xs font-bold font-mono uppercase cursor-pointer"
+              style={{ minWidth: '44px', minHeight: '44px' }}
+            >
+              ✕ Close
+            </button>
+          </div>
           
           {/* SEARCH & FILTERS */}
           <div className="p-4 border-b border-white/10 space-y-3 bg-black/25">
@@ -629,8 +713,8 @@ export default function AISummerCampSlideshow() {
                   <div
                     key={deck.day}
                     onClick={() => {
-                      setSelectedDayNum(deck.day);
-                      setActiveSlideIndex(0);
+                      changeDay(deck.day, 0);
+                      setIsMobileSidebarOpen(false);
                     }}
                     className={`p-4 cursor-pointer transition relative group border-b border-white/5 ${
                       isActive ? 'bg-[#E05C1A]/10' : 'hover:bg-white/5'
@@ -1048,6 +1132,96 @@ export default function AISummerCampSlideshow() {
             /* VIEW 1: SINGLE INTERACTIVE 16:9 SLIDE STAGE */
             <div className="w-full max-w-4xl flex flex-col items-center">
               
+              {/* PERSISTENT DAY-SELECTOR & INTERACTIVE PROGRESS BAR */}
+              <div className="w-full bg-white border border-gray-200/80 rounded-xl p-4 mb-4 shadow-md flex flex-col gap-3 relative z-25">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="h-9 w-9 bg-[#E05C1A] text-white flex items-center justify-center rounded-lg font-mono font-black text-sm shadow-md animate-pulse">
+                      D{selectedDayNum}
+                    </span>
+                    <div>
+                      <h3 className="font-sans font-extrabold text-sm text-[#0E1C35] flex items-center gap-1.5 flex-wrap">
+                        {currentDeck.topic}
+                      </h3>
+                      <p className="text-[10px] text-gray-500 font-medium">
+                        Week {currentDeck.week} · Curriculum Milestone
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Day Selector dropdown */}
+                  <div className="relative w-full sm:w-auto self-stretch sm:self-auto shrink-0">
+                    <button
+                      onClick={() => setShowDayDropdown(!showDayDropdown)}
+                      className="w-full sm:w-auto px-4 py-2.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 hover:border-gray-300 text-xs font-bold text-[#0E1C35] rounded-lg transition-all flex items-center justify-between sm:justify-start gap-2 cursor-pointer shadow-sm min-h-[44px]"
+                      title="Jump directly to any Day's curriculum"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <Calendar className="h-4 w-4 text-[#E05C1A]" />
+                        <span>Jump to Day ({selectedDayNum}/20)</span>
+                      </span>
+                      <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${showDayDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {showDayDropdown && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowDayDropdown(false)} />
+                        <div className="absolute right-0 mt-1.5 w-full sm:w-72 bg-white border border-gray-200/95 rounded-xl shadow-2xl z-50 max-h-80 overflow-y-auto divide-y divide-gray-100 py-1 transition-all">
+                          {decks.map((deck) => (
+                            <button
+                              key={deck.day}
+                              onClick={() => {
+                                changeDay(deck.day, 0);
+                                setShowDayDropdown(false);
+                              }}
+                              className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-colors cursor-pointer text-xs ${
+                                deck.day === selectedDayNum
+                                  ? 'bg-[#E05C1A]/10 text-[#0E1C35] font-extrabold'
+                                  : 'hover:bg-gray-50 text-gray-700'
+                              }`}
+                            >
+                              <span className={`font-mono font-bold shrink-0 px-1.5 py-0.5 rounded text-[10px] ${
+                                deck.day === selectedDayNum
+                                  ? 'bg-[#E05C1A] text-white'
+                                  : 'bg-gray-200 text-gray-500'
+                              }`}>
+                                Day {deck.day}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-bold truncate text-[11px]">{deck.topic}</p>
+                                <p className="text-[9px] text-gray-400 font-medium">Week {deck.week} · 11 Slides</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Micro visual progress line of the active slide within active day */}
+                <div className="space-y-1.5 mt-1 border-t border-gray-100 pt-3">
+                  <div className="flex justify-between items-center text-[10px] font-mono text-gray-400 font-bold">
+                    <span className="text-[#E05C1A]">CURRICULUM TIMELINE / نصاب کا سفر</span>
+                    <span>Day Progress: {Math.round(((activeSlideIndex + 1) / currentDeck.slides.length) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden shadow-inner flex">
+                    {currentDeck.slides.map((_, idx) => (
+                      <div
+                        key={idx}
+                        className={`h-full transition-all duration-500 border-r border-white/40 last:border-0 ${
+                          idx === activeSlideIndex
+                            ? 'bg-[#E05C1A] flex-1'
+                            : idx < activeSlideIndex
+                            ? 'bg-[#0E1C35] flex-1'
+                            : 'bg-gray-200 flex-1'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
               {/* SLIDES OUTLINE STRIP (سلائیڈز پٹی) */}
               <div className="w-full bg-white border border-gray-200 rounded-xl p-4 mb-4 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3 border-b border-gray-100 pb-2">
@@ -1126,9 +1300,12 @@ export default function AISummerCampSlideshow() {
               {/* THE 16:9 SLIDE BOX CONTAINER */}
               <div
                 ref={presentationContainerRef}
-                className="w-full aspect-[16/9] rounded-xl overflow-hidden shadow-2xl relative border border-gray-200/80 transition-all duration-300 group/slide"
+                onTouchStart={handleTouchStart}
+                onTouchEnd={handleTouchEnd}
+                className="w-full min-h-[380px] aspect-auto md:aspect-[16/9] rounded-2xl overflow-hidden shadow-2xl relative border border-gray-200/80 transition-all duration-300 group/slide focus-within:ring-2 focus-within:ring-[#E05C1A]/50 outline-none"
                 style={{
                   backgroundColor:
+                    isChangingDay ||
                     currentSlide.type === 'title' ||
                     currentSlide.type === 'recap' ||
                     currentSlide.type === 'agenda' ||
@@ -1137,6 +1314,7 @@ export default function AISummerCampSlideshow() {
                       ? '#0E1C35'
                       : '#FFFFFF',
                   color:
+                    isChangingDay ||
                     currentSlide.type === 'title' ||
                     currentSlide.type === 'recap' ||
                     currentSlide.type === 'agenda' ||
@@ -1146,23 +1324,37 @@ export default function AISummerCampSlideshow() {
                       : '#12120E'
                 }}
               >
-                
-                {/* 1. BRIGHTMIND LOGO - CONSTANT POSITION ACCORDING TO GUIDELINES */}
-                <div className="absolute top-6 left-8 z-10">
-                  <Logo
-                    variant={
-                      currentSlide.type === 'title' ||
-                      currentSlide.type === 'recap' ||
-                      currentSlide.type === 'agenda' ||
-                      currentSlide.type === 'activity' ||
-                      currentSlide.type === 'preview'
-                        ? 'light'
-                        : 'dark'
-                    }
-                    showText={true}
-                    className="scale-90 transform origin-top-left"
-                  />
-                </div>
+                {isChangingDay ? (
+                  <div className="absolute inset-0 w-full h-full flex flex-col justify-center items-center bg-[#0E1C35] text-white p-6 sm:p-12 z-20 animate-fade-in">
+                    <div className="relative flex items-center justify-center mb-4">
+                      <div className="animate-spin rounded-full h-12 w-12 border-4 border-t-[#E05C1A] border-r-transparent border-b-[#E05C1A]/20 border-l-[#E05C1A]/20" />
+                      <Sparkles className="absolute h-5 w-5 text-[#E05C1A] animate-pulse" />
+                    </div>
+                    <span className="font-sans font-extrabold text-sm tracking-widest text-[#E05C1A] uppercase animate-pulse text-center">
+                      Preparing Classroom Curriculum
+                    </span>
+                    <span className="font-sans font-semibold text-xs text-white/50 tracking-normal mt-2 text-center">
+                      روزانہ کا نیا نصاب ترتیب دیا جا رہا ہے...
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    {/* 1. BRIGHTMIND LOGO - CONSTANT POSITION ACCORDING TO GUIDELINES */}
+                    <div className="absolute top-5 sm:top-6 left-5 sm:left-8 z-10">
+                      <Logo
+                        variant={
+                          currentSlide.type === 'title' ||
+                          currentSlide.type === 'recap' ||
+                          currentSlide.type === 'agenda' ||
+                          currentSlide.type === 'activity' ||
+                          currentSlide.type === 'preview'
+                            ? 'light'
+                            : 'dark'
+                        }
+                        showText={true}
+                        className="scale-90 transform origin-top-left"
+                      />
+                    </div>
 
                 {/* 2. SLIDE COUNTER / TRACK TRACKER */}
                 <div className="absolute bottom-6 right-8 text-[11px] font-mono uppercase tracking-widest opacity-60">
@@ -1170,7 +1362,7 @@ export default function AISummerCampSlideshow() {
                 </div>
 
                 {/* 3. DYNAMIC CONTENT SLIDE WRAPPER */}
-                <div className="w-full h-full p-12 pt-24 pb-16 flex flex-col justify-between">
+                <div className="w-full h-full p-5 sm:p-8 md:p-12 pt-16 sm:pt-20 md:pt-24 pb-10 sm:pb-12 md:pb-16 flex flex-col justify-between">
                   
                   {/* SLIDE TRANSITION ANIMATION FOR HIGHLY REASSURED LOOKS */}
                   <AnimatePresence mode="wait" initial={false}>
@@ -1379,6 +1571,8 @@ export default function AISummerCampSlideshow() {
                     </motion.div>
                   </AnimatePresence>
                 </div>
+                </>
+                )}
 
                 {/* FLOATING HOVER ACTION ARROWS FOR EXTREMELY EASY CLICKING */}
                 <button
@@ -1716,7 +1910,9 @@ export default function AISummerCampSlideshow() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex flex-col justify-between p-8 transition-all duration-300"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            className="fixed inset-0 z-50 flex flex-col justify-between p-4 sm:p-8 transition-all duration-300 overflow-y-auto"
             style={{
               backgroundColor: projectorStyles.bg,
               color: projectorStyles.text
