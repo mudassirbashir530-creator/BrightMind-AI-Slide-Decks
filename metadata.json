@@ -1,0 +1,6 @@
+{
+  "name": "BrightMind AI Slide Decks",
+  "description": "Complete 20-day presentation slide deck generator for the BrightMind Institute of Education AI Summer Camp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
